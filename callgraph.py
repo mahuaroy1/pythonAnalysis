@@ -6,8 +6,9 @@ class CallGraphBuilder(ast.NodeVisitor):
     Builds a call graph by traversing the AST of Python source code.
     """
     def __init__(self):
-        # key - function, value - set of functions it calls
-        self.call_graph = {}  # Adjacency list representing function calls
+        # key - function name, value - set of functions it calls
+        # Function name -> set of calls made by this function
+        self.call_graph = {}
         self.current_function = None
 
     def visit_FunctionDef(self, node):
@@ -39,6 +40,7 @@ class CallGraphBuilder(ast.NodeVisitor):
 
 class MultiFileCallGraphBuilder:
     def __init__(self):
+        # Dict - from filename to callgraphs for that file
         self.global_call_graph = {}  # Unified call graph across all files
 
     def build_call_graph(self, python_files_ast):

@@ -25,7 +25,7 @@ class TaintAnalyzer(ast.NodeVisitor):
         # Track variables that are tainted (untrusted)
         self.tainted_vars = set()
         self.tainted_collections = {}  # Track tainted elements in lists/dicts
-        self.tainted_functions = {}  # Track functions that propagate taint
+        self.tainted_functions = {}  # Track functions that propagate/return taint
 
         # List of issues found (tainted data flowing to sensitive sinks)
         self.issues = []
@@ -43,7 +43,8 @@ class TaintAnalyzer(ast.NodeVisitor):
         callname = ".".join(name[::-1])
         # Detect taint sources
         if callname in self.taint_sources:
-            if isinstance(node.parent, ast.Assign):
+            # for cases e.g. return call() or a = call()
+            if  hasattr(node, "parent") &  isinstance(node.parent, ast.Assign):
                 for target in node.parent.targets:
                     if isinstance(target, ast.Name):
                         self.tainted_vars.add(target.id)
@@ -59,7 +60,8 @@ class TaintAnalyzer(ast.NodeVisitor):
 
         # Detect tainted function return values
         if callname in self.tainted_functions:
-            if isinstance(node.parent, ast.Assign):
+            # for cases e.g. return call() or a = call()
+            if  hasattr(node, "parent") & isinstance(node.parent, ast.Assign):
                 for target in node.parent.targets:
                     if isinstance(target, ast.Name):
                         self.tainted_vars.add(target.id)
@@ -71,18 +73,18 @@ class TaintAnalyzer(ast.NodeVisitor):
         """
         Visits assignments to propagate taint, including list and dictionaries
         """
-        # Propagate taint between variables
+        # Propagate taint between variables - propagate taint from rhs to lhs
         if isinstance(node.value, ast.Name) and node.value.id in self.tainted_vars:
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     self.tainted_vars.add(target.id)
                     print(f"Propagation: {target.id} is tainted by {node.value.id}")
 
-        # Track tainted lists or dictionaries
+        # Track tainted lists or dictionaries on rhs of assignment statement
         if isinstance(node.value, (ast.List, ast.Dict)):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    self.tainted_collections[target.id] = self._extract_tainted_elements(node.value)
+                    self.tainted_collections[target.id] = self._extract_tainted_elements(node.value, target.id)
 
         self.generic_visit(node)
 
@@ -121,13 +123,13 @@ class TaintAnalyzer(ast.NodeVisitor):
         if isinstance(node, ast.Call):  # Function call
             name = get_name(node.func, [])
             callname = ".".join(name[::-1])
-            return callname in self.tainted_functions
+            return callname in self.tainted_functions or callname in self.taint_sources
         if isinstance(node, ast.BinOp):  # Binary operation
             return self._is_tainted(node.left) or self._is_tainted(node.right)
 
         return False
 
-    def _extract_tainted_elements(self, node):
+    def _extract_tainted_elements(self, node, parentname):
         """
         Extracts tainted elements from lists or dictionaries during assignment.
         """
@@ -136,10 +138,21 @@ class TaintAnalyzer(ast.NodeVisitor):
             for elt in node.elts:
                 if isinstance(elt, ast.Name) and elt.id in self.tainted_vars:
                     tainted_elements.add(elt.id)
+                if isinstance(elt,ast.Call):
+                    name = get_name(elt.func, [])
+                    callname = ".".join(name[::-1])
+                    if callname in self.tainted_functions or callname in self.taint_sources:
+                        self.tainted_vars.add(parentname)
+
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
                 if isinstance(value, ast.Name) and value.id in self.tainted_vars:
                     tainted_elements.add(key.s if isinstance(key, ast.Str) else key.id)
+                if isinstance(value,ast.Call):
+                    name = get_name(value.func, [])
+                    callname = ".".join(name[::-1])
+                    if callname in self.tainted_functions or callname in self.taint_sources:
+                        self.tainted_vars.add(parentname)
         return tainted_elements
 
     def analyze(self, tree):

@@ -129,6 +129,9 @@ def main():
     multi_file_builder = MultiFileCallGraphBuilder()
     multi_file_builder.build_call_graph(parsed_files)
     print("call graph")
+    # Dictionary of dictionary
+    # callgraph info for each file, callnodes is dict where key is function name
+    # value is set of calls inside that function
     for file, callnodes in multi_file_builder.global_call_graph.items():
         print(file,callnodes)
     #multi_file_builder.visualize_global_call_graph(output_filename="multi_file_call_graph")
