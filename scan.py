@@ -1,44 +1,32 @@
 import ast
 import argparse
-import graphviz
-#import networkx
-from graphviz import Digraph
 import zipfile
-import os
-from io import TextIOWrapper
-from cfgbuilder import CFGBuilder, MultiModuleCFGBuilder, GlobalRegistry
+import sys
+from graphviz import Digraph
+from cfgbuilder import MultiModuleCFGBuilder, GlobalRegistry
 from callgraph import MultiFileCallGraphBuilder
-from taintanalysis import (MultiFileTaintAnalyzer)
+from taintanalysis import MultiFileTaintAnalyzer
 
 def parse_all_python_files(zip_file_path):
     """
-    Reads a zip file and parses all Python files (*.py) within it, including directories.
+    Parse Python files in a ZIP archive without extracting its contents.
 
     Args:
-        zip_file_path (str): The path to the zip file.
+        zip_file_path (str): Path to the ZIP archive.
 
     Returns:
         dict: A dictionary where keys are file paths in the zip, and values are their ASTs.
     """
-    # Dictionary to store the parsed AST for each Python file
     python_files_ast = {}
-
-    # Open the zip file
-    with zipfile.ZipFile(zip_file_path, 'r') as zip_file:
-        # List all files in the archive
+    with zipfile.ZipFile(zip_file_path) as zip_file:
         for file_name in zip_file.namelist():
-            # Check if the file is a Python file
-            if file_name.endswith('.py'):
-                # Read the content of the Python file
-                with zip_file.open(file_name) as file:
-                    try:
-                        # Parse the Python file content into an AST
-                        file_content = TextIOWrapper(file, encoding='utf-8').read()
-                        python_ast = ast.parse(file_content, filename=file_name)
-                        # Store the parsed AST in the dictionary
-                        python_files_ast[file_name] = python_ast
-                    except Exception as e:
-                        print(f"Error parsing {file_name}: {e}")
+            if not file_name.endswith(".py"):
+                continue
+            try:
+                source = zip_file.read(file_name)
+                python_files_ast[file_name] = ast.parse(source, filename=file_name)
+            except (SyntaxError, UnicodeDecodeError) as error:
+                print(f"Error parsing {file_name}: {error}", file=sys.stderr)
 
     return python_files_ast
 
@@ -93,48 +81,33 @@ class MultiFileAnalyzer:
             cfg_builder.visit(ast_tree)
             cfg_builder.dataflow_analysis()
 
-            '''
-            # Print the CFG
-            for node_name, node in cfg_builder.nodes.items():
-                print(node)
-            # print(ast.dump(ast_tree, indent=2))  # Pretty print the AST
-            # Print the Context Registry
-            print("\nContext Registry:")
-            for var, details in cfg_builder.scope_manager.context_registry.items():
-                print(var, details)
-                '''
-
     def visualize_analysis(self):
         visualize_global_registry(self.global_registry)
 
-def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Build a Control Flow Graph (CFG) for a Python program.")
-    parser.add_argument("filename", help="The Python source file to analyze")
-    args = parser.parse_args()
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Analyze Python files contained in a ZIP archive."
+    )
+    parser.add_argument("filename", help="ZIP archive containing Python source files")
+    args = parser.parse_args(argv)
 
-    # Initialize the global registry and process both modules
     global_registry = GlobalRegistry()
-    # Parse Python files from the zip archive
-    parsed_files = parse_all_python_files(args.filename)
+    try:
+        parsed_files = parse_all_python_files(args.filename)
+    except (OSError, zipfile.BadZipFile) as error:
+        parser.error(f"cannot read ZIP archive {args.filename!r}: {error}")
+    if not parsed_files:
+        parser.error(f"no parseable Python files found in {args.filename!r}")
 
     # Perform multi-file analysis
     analyzer = MultiFileAnalyzer(global_registry)
     analyzer.analyze_files(parsed_files)
 
-    # Visualize the inter-module relationships and contexts
-    #analyzer.visualize_analysis()
-
-    # Build and visualize multi-file call graph
     multi_file_builder = MultiFileCallGraphBuilder()
     multi_file_builder.build_call_graph(parsed_files)
-    print("call graph")
-    # Dictionary of dictionary
-    # callgraph info for each file, callnodes is dict where key is function name
-    # value is set of calls inside that function
+    print("Call graph")
     for file, callnodes in multi_file_builder.global_call_graph.items():
-        print(file,callnodes)
-    #multi_file_builder.visualize_global_call_graph(output_filename="multi_file_call_graph")
+        print(file, {function: sorted(calls) for function, calls in callnodes.items()})
 
     # Perform multi-file taint analysis
     multi_file_analyzer = MultiFileTaintAnalyzer()
@@ -143,7 +116,6 @@ def main():
     # Print the taint analysis report
     print(multi_file_analyzer.get_report())
 
-    # Print the global registry
     print("\nGlobal Registry:")
     for module, symbols in global_registry.registry.items():
         print(module, symbols)

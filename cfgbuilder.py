@@ -1,5 +1,4 @@
 import ast
-import argparse
 from collections import defaultdict
 
 class GlobalRegistry:
@@ -99,6 +98,7 @@ class CFGBuilder(ast.NodeVisitor):
         self.current_node = None
         self.counter = 0
         self.scope_manager = ScopeManager()
+        self.global_registry = GlobalRegistry()
 
     def _create_node(self, name, node_type):
         node = CFGNode(name, node_type,self.scope_manager.current_scope())
@@ -366,38 +366,74 @@ class CFGBuilder(ast.NodeVisitor):
         condition_node = self._create_node(f"if_condition_{self.counter}", "If")
         self.counter += 1
         self.current_node.add_successor(condition_node)
-        self.current_node = condition_node
-        # Visit the then branch
+
         then_node = self._create_node(f"if_then_{self.counter}", "IfThen")
         self.counter += 1
-        self.current_node.add_successor(then_node)
+        condition_node.add_successor(then_node)
         self.current_node = then_node
         for stmt in node.body:
             self.visit(stmt)
-        # Visit the else branch (if exists)
+
+        branch_exits = [self.current_node]
         if node.orelse:
             else_node = self._create_node(f"if_else_{self.counter}", "IfElse")
             self.counter += 1
-            self.current_node.add_successor(else_node)
+            condition_node.add_successor(else_node)
             self.current_node = else_node
             for stmt in node.orelse:
                 self.visit(stmt)
+            branch_exits.append(self.current_node)
+        else:
+            branch_exits.append(condition_node)
+
+        join_node = self._create_node(f"if_join_{self.counter}", "IfJoin")
+        self.counter += 1
+        for branch_exit in branch_exits:
+            branch_exit.add_successor(join_node)
+        self.current_node = join_node
 
     def visit_For(self, node):
-        for_node = self._create_node(f"for_loop_{self.counter}", "For")
+        for_node = self._create_node(f"for_condition_{self.counter}", "For")
         self.counter += 1
         self.current_node.add_successor(for_node)
-        self.current_node = for_node
+        body_node = self._create_node(f"for_body_{self.counter}", "ForBody")
+        self.counter += 1
+        for_node.add_successor(body_node)
+        self.current_node = body_node
         for stmt in node.body:
             self.visit(stmt)
+        self.current_node.add_successor(for_node)
+        self._finish_loop(for_node, node.orelse, "for")
 
     def visit_While(self, node):
-        while_node = self._create_node(f"while_loop_{self.counter}", "While")
+        while_node = self._create_node(f"while_condition_{self.counter}", "While")
         self.counter += 1
         self.current_node.add_successor(while_node)
-        self.current_node = while_node
+        body_node = self._create_node(f"while_body_{self.counter}", "WhileBody")
+        self.counter += 1
+        while_node.add_successor(body_node)
+        self.current_node = body_node
         for stmt in node.body:
             self.visit(stmt)
+        self.current_node.add_successor(while_node)
+        self._finish_loop(while_node, node.orelse, "while")
+
+    def _finish_loop(self, condition_node, else_body, loop_name):
+        exit_node = self._create_node(f"{loop_name}_exit_{self.counter}", "LoopExit")
+        self.counter += 1
+        if else_body:
+            else_node = self._create_node(
+                f"{loop_name}_else_{self.counter}", "LoopElse"
+            )
+            self.counter += 1
+            condition_node.add_successor(else_node)
+            self.current_node = else_node
+            for stmt in else_body:
+                self.visit(stmt)
+            self.current_node.add_successor(exit_node)
+        else:
+            condition_node.add_successor(exit_node)
+        self.current_node = exit_node
 
     def visit_Try(self, node):
         try_node = self._create_node(f"try_block_{self.counter}", "Try")
@@ -626,4 +662,3 @@ class MultiModuleCFGBuilder(CFGBuilder):
     def __init__(self, global_registry):
         super().__init__()
         self.global_registry = global_registry  # Reference to the global registry
-
